@@ -1,220 +1,116 @@
 """
-Structured logging configuration for VolaCast.
+Structured logging module for VolaCast.
 
-This module provides structured JSON logging with contextual information including
-request duration, HTTP status codes, API key hash (for audit), and error traces.
-All logs are emitted to stdout/stderr for container-friendly operation.
-
-Functions:
-    setup_logging: Initialize logging configuration.
-    get_logger: Retrieve a logger instance for a module.
-
-Example:
-    >>> from src.volatility_api.core.logging import get_logger
-    >>> logger = get_logger(__name__)
-    >>> logger.info("Application started", extra={"action": "startup"})
+Configures application-wide JSON logging and request tracing to monitor
+performance, latency (<= 2s p95 target), and error tracking.
 """
 
 import json
 import logging
-import logging.config
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+
+from volatility_api.config import settings
+from volatility_api.data.repository import RepositoryService
 
 
 class JSONFormatter(logging.Formatter):
-    """
-    Custom log formatter that outputs structured JSON logs.
-
-    This formatter converts log records to JSON with consistent structure:
-    {
-        "timestamp": "2024-01-15T10:30:45.123Z",
-        "level": "INFO",
-        "logger": "src.volatility_api.api.routes",
-        "message": "Forecast retrieved",
-        "extra": {...}
-    }
-
-    Extra fields from the log record context are included in the output for
-    rich observability.
-    """
+    """Formats log records into standard JSON strings."""
 
     def format(self, record: logging.LogRecord) -> str:
-        """
-        Format log record as JSON.
-
-        Args:
-            record: The log record to format.
-
-        Returns:
-            JSON-serialized log entry as a string.
-        """
-        log_data: Dict[str, Any] = {
-            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z",
+        log_payload: Dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,
-            "logger": record.name,
+            "name": record.name,
             "message": record.getMessage(),
         }
-
-        # Include exception traceback if present
+        if hasattr(record, "extra_data") and isinstance(record.extra_data, dict):
+            log_payload.update(record.extra_data)
         if record.exc_info:
-            log_data["exception"] = self.formatException(record.exc_info)
+            log_payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_payload)
 
-        # Include extra fields from the record
-        extra_fields = {
-            k: v
-            for k, v in record.__dict__.items()
-            if k not in (
-                "name",
-                "msg",
-                "args",
-                "created",
-                "filename",
-                "funcName",
-                "levelname",
-                "levelno",
-                "lineno",
-                "module",
-                "msecs",
-                "message",
-                "pathname",
-                "process",
-                "processName",
-                "relativeCreated",
-                "thread",
-                "threadName",
-                "exc_info",
-                "exc_text",
-                "stack_info",
-            )
-        }
 
-        if extra_fields:
-            log_data["extra"] = extra_fields
+def setup_logging() -> logging.Logger:
+    """Initialize root logger with JSON handler and configured log level."""
+    logger = logging.getLogger(settings.app_name)
+    logger.setLevel(getattr(logging, settings.log_level, logging.INFO))
+    logger.handlers.clear()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
+
+
+logger = setup_logging()
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware that calculates request duration, logs JSON metrics,
+    and records audit logs to the SQLite repository.
+    """
+
+    def __init__(self, app, repo_service: RepositoryService):
+        super().__init__(app)
+        self.repo = repo_service
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        start_time = time.perf_counter()
+        raw_key = request.headers.get("X-API-Key")
+        api_key_hash = None
+
+        if raw_key:
+            from volatility_api.core.security import SecurityService
+            try:
+                api_key_hash = SecurityService.hash_api_key(raw_key)
+            except ValueError:
+                api_key_hash = None
+
+        response: Optional[Response] = None
+        status_code = 500
+        error_code = None
 
         try:
-            return json.dumps(log_data, default=str)
-        except (TypeError, ValueError):
-            # Fallback to plain string if JSON serialization fails
-            return str(log_data)
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception as exc:
+            error_code = exc.__class__.__name__
+            raise exc
+        finally:
+            process_time_ms = (time.perf_counter() - start_time) * 1000.0
+            pair = request.path_params.get("pair")
 
+            logger.info(
+                f"{request.method} {request.url.path} completed with {status_code}",
+                extra={
+                    "extra_data": {
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": status_code,
+                        "duration_ms": round(process_time_ms, 2),
+                        "pair": pair,
+                    }
+                },
+            )
 
-LOGGING_CONFIG: Dict[str, Any] = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "json": {
-            "()": JSONFormatter,
-        },
-        "default": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        },
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "level": "DEBUG",
-            "formatter": "json",
-            "stream": "ext://sys.stdout",
-        },
-        "error_console": {
-            "class": "logging.StreamHandler",
-            "level": "WARNING",
-            "formatter": "json",
-            "stream": "ext://sys.stderr",
-        },
-    },
-    "loggers": {
-        "src.volatility_api": {
-            "level": "DEBUG",
-            "handlers": ["console", "error_console"],
-            "propagate": False,
-        },
-        "uvicorn": {
-            "level": "INFO",
-            "handlers": ["console"],
-        },
-        "uvicorn.access": {
-            "level": "INFO",
-            "handlers": ["console"],
-            "propagate": False,
-        },
-    },
-    "root": {
-        "level": "INFO",
-        "handlers": ["console"],
-    },
-}
-
-
-def setup_logging(log_level: str = "INFO") -> None:
-    """
-    Initialize logging configuration.
-
-    Configures structured JSON logging to stdout/stderr. All handlers are
-    configured for container-friendly operation (no file handlers).
-
-    Args:
-        log_level: Minimum logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
-
-    Example:
-        >>> setup_logging("DEBUG")
-        >>> logger = get_logger(__name__)
-        >>> logger.debug("Debug message enabled")
-    """
-    # Update config with desired log level
-    LOGGING_CONFIG["loggers"]["src.volatility_api"]["level"] = log_level.upper()
-    LOGGING_CONFIG["handlers"]["console"]["level"] = log_level.upper()
-
-    logging.config.dictConfig(LOGGING_CONFIG)
-
-
-def get_logger(name: str) -> logging.Logger:
-    """
-    Get a logger instance for a module.
-
-    Args:
-        name: Logger name, typically __name__ from calling module.
-
-    Returns:
-        Configured logger instance.
-
-    Example:
-        >>> logger = get_logger(__name__)
-        >>> logger.info("Service initialized")
-    """
-    return logging.getLogger(name)
-
-
-class LoggingContext:
-    """
-    Context manager for adding structured context to logs.
-
-    Temporarily adds extra fields to all logs within a with block.
-
-    Example:
-        >>> logger = get_logger(__name__)
-        >>> with LoggingContext(api_key_hash="abc123", pair="EURUSD"):
-        ...     logger.info("Processing forecast")
-        ...     # Logs will include api_key_hash and pair fields
-    """
-
-    def __init__(self, **context: Any):
-        """
-        Initialize logging context.
-
-        Args:
-            **context: Arbitrary key-value pairs to add to log records.
-        """
-        self.context = context
-
-    def __enter__(self) -> "LoggingContext":
-        """Enter context manager."""
-        self._token = logging.LoggerAdapter.__new__(logging.LoggerAdapter)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context manager."""
-        pass
-
+            # Audit log to DB (ignore health check to prevent log bloat)
+            if request.url.path != "/v1/health":
+                try:
+                    self.repo.log_request(
+                        endpoint=request.url.path,
+                        method=request.method,
+                        response_time_ms=process_time_ms,
+                        status_code=status_code,
+                        pair=pair,
+                        api_key_hash=api_key_hash,
+                        error_code=error_code,
+                    )
+                except Exception as log_err:
+                    logger.error(f"Failed to record audit log: {log_err}")

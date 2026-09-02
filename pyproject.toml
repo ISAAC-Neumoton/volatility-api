@@ -77,7 +77,6 @@ packages = ["volatility_api"]
 testpaths = ["tests"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
-testpaths = ["tests"]
 addopts = "--cov=src/volatility_api --cov-report=html --cov-report=term-missing"
 
 [tool.black]

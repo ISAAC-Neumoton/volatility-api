@@ -1,13 +1,35 @@
 """Main application entry point"""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.volatility_api.config import settings
 from src.volatility_api.api import routes
+from src.volatility_api.data.repository import RepositoryService
+from src.volatility_api.core.logging import RequestLoggingMiddleware, logger
 
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+# Initialize DB tables cleanly on startup without blocking requests
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle events: initialize tables on startup."""
+    try:
+        repo = RepositoryService(settings.database_url)
+        repo.initialize()
+        logger.info("Database schema initialized successfully.")
+    except Exception as e:
+        logger.error(f"Database initialization warning: {e}")
+    yield
+
+
+app = FastAPI(
+    title=settings.app_name,
+    debug=settings.debug,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -17,6 +39,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add Request Logging & Audit Middleware (Sprint 4)
+repo_instance = RepositoryService(settings.database_url)
+app.add_middleware(RequestLoggingMiddleware, repo_service=repo_instance)
 
 # Include routers
 app.include_router(routes.router)

@@ -17,7 +17,7 @@ Fixtures:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Generator
 
 import numpy as np
@@ -272,10 +272,8 @@ class TestRepositoryService:
 
     def test_initialize(self, in_memory_db: RepositoryService):
         """Test database initialization creates tables."""
-        # Should have created tables without error
         session = in_memory_db.get_session()
         try:
-            # Query to verify tables exist
             session.query(PriceHistory).count()
             session.query(ModelRegistry).count()
         finally:
@@ -299,7 +297,6 @@ class TestRepositoryService:
 
     def test_get_price_history(self, in_memory_db: RepositoryService):
         """Test retrieving price history."""
-        # Insert some records
         for i in range(10):
             record = PriceHistory(
                 pair="EURUSD",
@@ -312,7 +309,6 @@ class TestRepositoryService:
             )
             in_memory_db.upsert_price_history(record)
 
-        # Retrieve records
         results = in_memory_db.get_price_history("EURUSD", limit=5)
         assert len(results) == 5
         assert all(r.pair == "EURUSD" for r in results)
@@ -343,7 +339,7 @@ class TestRepositoryService:
     def test_validate_api_key_expired(self, in_memory_db: RepositoryService):
         """Test API key validation for expired keys."""
         key_hash = "expired_key"
-        yesterday = datetime.utcnow() - timedelta(days=1)
+        yesterday = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
         
         session = in_memory_db.get_session()
         try:
@@ -394,7 +390,6 @@ class TestRepositoryService:
 
     def test_get_latest_model(self, in_memory_db: RepositoryService):
         """Test retrieving latest model."""
-        # Register two models
         in_memory_db.register_model(
             pair="EURUSD",
             model_version="1.0.0",
@@ -425,12 +420,12 @@ class TestRepositoryService:
         )
 
         assert result.id is not None
-        assert result.outperformance_pct < 0  # GARCH underperformed baseline
-        assert result.outperformance_pct == pytest.approx(-9.09, abs=0.1)
+        # baseline_mae (0.0022) > mae (0.0020) -> GARCH outperformed baseline
+        assert result.outperformance_pct > 0
+        assert result.outperformance_pct == pytest.approx(9.09, abs=0.1)
 
     def test_get_backtest_results(self, in_memory_db: RepositoryService):
         """Test retrieving backtest results."""
-        # Save multiple results
         for i in range(3):
             in_memory_db.save_backtest_result(
                 pair="EURUSD",
@@ -448,4 +443,3 @@ class TestRepositoryService:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
