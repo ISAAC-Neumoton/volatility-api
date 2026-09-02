@@ -23,7 +23,7 @@ Example:
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import (
     create_engine,
@@ -664,4 +664,120 @@ class RepositoryService:
             raise e
         finally:
             session.close()
+
+    def save_model_with_joblib(
+        self,
+        model: Any,
+        pair: str,
+        model_version: str = "1.0.0",
+        training_data_points: int = 504,
+    ) -> Tuple[str, ModelRegistry]:
+        """
+        Serialize and persist model using joblib.
+
+        Saves model to disk and registers metadata in ModelRegistry table.
+
+        Args:
+            model: GARCHModel instance with fitted state.
+            pair: FX pair the model was trained on.
+            model_version: Semantic version (default "1.0.0").
+            training_data_points: Number of training observations.
+
+        Returns:
+            Tuple of (file_path, ModelRegistry record).
+
+        Raises:
+            ImportError: If joblib not installed.
+            IOError: If model persistence fails.
+        """
+        try:
+            import joblib
+        except ImportError:
+            raise ImportError("joblib required for model serialization")
+
+        import os
+
+        # Create models directory if needed
+        model_dir = "./models"
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
+
+        # Construct file path with timestamp
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(
+            model_dir,
+            f"{pair}_garch_v{model_version}_{timestamp}.pkl",
+        )
+
+        # Serialize model
+        try:
+            joblib.dump(model, file_path, compress=3)
+        except Exception as e:
+            raise IOError(f"Failed to serialize model to {file_path}: {e}") from e
+
+        # Register in database
+        registry = self.register_model(
+            pair=pair,
+            model_version=model_version,
+            params_path=file_path,
+            training_data_points=training_data_points,
+            mse=None,
+        )
+
+        return file_path, registry
+
+    def load_model_with_joblib(self, file_path: str) -> Any:
+        """
+        Load model from joblib serialization.
+
+        Args:
+            file_path: Path to serialized model file.
+
+        Returns:
+            Deserialized model instance.
+
+        Raises:
+            ImportError: If joblib not installed.
+            FileNotFoundError: If file does not exist.
+            IOError: If model deserialization fails.
+        """
+        try:
+            import joblib
+        except ImportError:
+            raise ImportError("joblib required for model deserialization")
+
+        import os
+
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Model file not found: {file_path}")
+
+        try:
+            return joblib.load(file_path)
+        except Exception as e:
+            raise IOError(f"Failed to deserialize model from {file_path}: {e}") from e
+
+    def get_latest_model_for_pair(self, pair: str) -> Optional[ModelRegistry]:
+        """
+        Get metadata for latest trained model for a pair.
+
+        Args:
+            pair: FX pair code.
+
+        Returns:
+            ModelRegistry record or None if no models exist.
+        """
+        return self.get_latest_model(pair)
+
+    def get_latest_model_path(self, pair: str) -> Optional[str]:
+        """
+        Get file path to latest serialized model.
+
+        Args:
+            pair: FX pair code.
+
+        Returns:
+            File path string or None if no models exist.
+        """
+        model_registry = self.get_latest_model(pair)
+        return model_registry.params_path if model_registry else None
 
