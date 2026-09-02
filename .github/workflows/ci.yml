@@ -38,7 +38,7 @@ jobs:
 
     - name: Run tests with pytest
       env:
-        ADMIN_SECRET_KEY: "ci-dummy-admin-secret-key-32chars"
+        ADMIN_SECRET_KEY: "7bLlcQmjfcZ2eLtAJ1xnWd-eXq3wHx0ZzuFNtcT49VU"
         DATABASE_URL: "sqlite:///:memory:"
         LOG_LEVEL: "INFO"
       run: |
