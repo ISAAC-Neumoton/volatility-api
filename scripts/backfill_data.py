@@ -1,33 +1,3 @@
-"""
-Backfill historical price data into the repository.
-
-This script downloads historical OHLCV data for FX pairs and persists them to
-the database for use in model training and validation. Supports manual date range
-specification and automatic progress reporting with error handling and recovery.
-
-Usage:
-    # Backfill EURUSD with 2 years of data
-    python scripts/backfill_data.py EURUSD
-
-    # Backfill with custom date range
-    python scripts/backfill_data.py EURUSD --start-date 2021-01-01 --end-date 2024-01-15
-
-    # Backfill multiple pairs
-    python scripts/backfill_data.py EURUSD USDJPY GBPUSD
-
-    # Use Alpha Vantage as fallback
-    python scripts/backfill_data.py EURUSD --alpha-key your_key_here
-
-Example:
-    >>> python scripts/backfill_data.py EURUSD USDJPY
-    Loading data for EURUSD from 2022-01-15 to 2024-01-15
-    Downloaded 504 rows
-    Successfully backfilled data for EURUSD
-    Loading data for USDJPY from 2022-01-15 to 2024-01-15
-    Downloaded 498 rows
-    Successfully backfilled data for USDJPY
-"""
-
 import argparse
 import logging
 import sys
