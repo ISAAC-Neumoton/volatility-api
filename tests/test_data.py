@@ -176,10 +176,10 @@ class TestDataFetcher:
     def test_validate_data_negative_price(self, sample_dataframe: pd.DataFrame):
         """Test validation fails with negative prices."""
         df_bad = sample_dataframe.copy()
-        df_bad.loc[df_bad.index[0], "Close"] = -0.5
+        # Set all columns negative so OHLC consistency holds and non-positive check triggers
+        df_bad.loc[df_bad.index[0], ["Open", "High", "Low", "Close"]] = [-0.5, -0.4, -0.6, -0.5]
         with pytest.raises(ValueError, match="non-positive prices"):
             DataFetcher.validate_data(df_bad)
-
 
 # ============================================================================
 # Tests: YFinanceFetcher

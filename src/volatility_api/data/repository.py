@@ -261,7 +261,7 @@ class BacktestResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
-        Index("ix_pair_date", "pair", "run_date"),
+        Index("ix_backtest_pair_date", "pair", "run_date"),
     )
 
     def __repr__(self) -> str:
